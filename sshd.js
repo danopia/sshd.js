@@ -141,15 +141,33 @@ require('net').createServer(function (conn) {
         sendPayload([{byte: 52}]); // SSH_MSG_USERAUTH_SUCCESS
         break;
       
+      case 80: // SSH_MSG_GLOBAL_REQUEST
+        var type = packet.readString();
+        var wantReply = packet.readBool();
+        
+        if (type == 'keepalive@openssh.com') {
+          console.log('Client is still alive!');
+          sendPayload([{byte: 81}]); // SSH_MSG_REQUEST_SUCCESS
+        } else {
+          console.log('Global requested', type, 'for but idk');
+          if (wantReply)
+            sendPayload([{byte: 82}]); // SSH_MSG_REQUEST_FAILURE
+        };
+        break;
+      
       case 90: // SSH_MSG_CHANNEL_OPEN
         var channel = {
           type: packet.readString(),
           sender: packet.readUInt32(),
           initSize: packet.readUInt32(),
           maxSize: packet.readUInt32()}; // plus more
-        console.log(channel);
-        
+          
         sendPayload([{byte: 91}, {uint32: channel.sender}, {uint32: channel.sender}, {uint32: channel.initSize}, {uint32: channel.maxSize}]); // SSH_MSG_CHANNEL_OPEN_CONFIRMATION
+        break;
+      
+      case 96: // SSH_MSG_CHANNEL_EOF
+        if (proc) proc.stdin.end();
+      case 97: // SSH_MSG_CHANNEL_CLOSE
         break;
       
       case 98: // SSH_MSG_CHANNEL_REQUEST
@@ -160,8 +178,49 @@ require('net').createServer(function (conn) {
         if (type == 'env') {
           console.log('Environment:', packet.readString(), '=', packet.readString());
         } else if (type == 'exec') {
-          console.log('Client wants to exec', packet.readString(), wantReply);
-          sendPayload([{byte: 99}, {uint32: recip}]); // SSH_MSG_CHANNEL_SUCCESS
+          var bin = packet.readString();
+          console.log('Client wants to exec', bin);
+          
+          if (bin == "git-receive-pack 'sshd.js'") {
+            sendPayload([{byte: 99}, {uint32: recip}]); // SSH_MSG_CHANNEL_SUCCESS
+            
+            proc = require('child_process').spawn('git-receive-pack', ['.git']);
+            proc.stdout.on('data', function (d) {
+              console.log(d);
+              sendPayload([{byte: 94}, {uint32: recip}, d]);
+            }).setEncoding('utf8');
+            proc.stderr.on('data', function (d) {
+              console.log('STDERR:', d);
+            }).setEncoding('utf8');
+            proc.on('exit', function (code, signal) {
+              if (code !== null) {
+                sendPayload([{byte: 98}, {uint32: recip}, 'exit-status', false, {uint32: code}]); // SSH_MSG_CHANNEL_REQUEST
+              };
+              
+              sendPayload([{byte: 97}, {uint32: recip}]);
+              proc = null;
+            });
+          } else {
+            sendPayload([{byte:100}, {uint32: recip}]); // SSH_MSG_CHANNEL_FAILURE
+            break;
+          };
+          
+          /*
+          var cp = require('child_process').spawn('cowsay');
+          cp.stdin.write(bin);
+          cp.stdin.end();
+          cp.stdout.on('data', function (d) {
+            console.log(d);
+            sendPayload([{byte: 94}, {uint32: recip}, d]);
+          }).setEncoding('utf8');
+          cp.on('exit', function (code, signal) {
+            if (code !== null) {
+              sendPayload([{byte: 98}, {uint32: recip}, 'exit-status', false, {uint32: code}]); // SSH_MSG_CHANNEL_REQUEST
+            };
+            
+            sendPayload([{byte: 97}, {uint32: recip}]);
+          });
+          */
         } else if (type == 'pty-req') {
           var pty = {
             term: packet.readString(),
@@ -187,13 +246,19 @@ require('net').createServer(function (conn) {
         var chan = packet.readUInt32();
         var data = packet.readString();
         console.log(chan, data);
-        if (data == '\u0004') {
-          sendPayload([{byte: 94}, {uint32: chan}, 'Hit q to exit\r\n']);
-        } else if (data == 'q') {
-          sendPayload([{byte: 1}, {uint32: 0}, 'Bye!']);
-        } else {
-          sendPayload([{byte: 94}, {uint32: chan}, 'You hit ' + data + '\r\n']);
-        }
+        if (proc)
+          proc.stdin.write(data);
+        else {
+          if (data == '\u0004') {
+            sendPayload([{byte: 94}, {uint32: chan}, 'Hit q to exit\r\n']);
+          } else if (data == 'q') {
+            sendPayload([{byte: 98}, {uint32: chan}, 'exit-status', false, {uint32: 0}]); // SSH_MSG_CHANNEL_REQUEST
+            sendPayload([{byte: 97}, {uint32: chan}]);
+          } else {
+            sendPayload([{byte: 94}, {uint32: chan}, 'You hit ' + data + '\r\n']);
+          }
+        };
+        
         break;
       
       default:
