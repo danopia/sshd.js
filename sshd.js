@@ -161,6 +161,7 @@ require('net').createServer(function (conn) {
           sender: packet.readUInt32(),
           initSize: packet.readUInt32(),
           maxSize: packet.readUInt32()}; // plus more
+        console.log(channel);
           
         sendPayload([{byte: 91}, {uint32: channel.sender}, {uint32: channel.sender}, {uint32: channel.initSize}, {uint32: channel.maxSize}]); // SSH_MSG_CHANNEL_OPEN_CONFIRMATION
         break;
@@ -180,14 +181,17 @@ require('net').createServer(function (conn) {
         } else if (type == 'exec') {
           var bin = packet.readString();
           console.log('Client wants to exec', bin);
-          
-          if (bin == "git-receive-pack 'sshd.js'") {
+          /*
+          if (bin == "git-upload-pack 'sshd.js'") {
             sendPayload([{byte: 99}, {uint32: recip}]); // SSH_MSG_CHANNEL_SUCCESS
             
-            proc = require('child_process').spawn('git-receive-pack', ['.git']);
+            proc = require('child_process').spawn('git-upload-pack', ['.git']);
             proc.stdout.on('data', function (d) {
-              console.log(d);
-              sendPayload([{byte: 94}, {uint32: recip}, d]);
+              console.log(d.length, d);
+              while (d.length) {
+                sendPayload([{byte: 94}, {uint32: recip}, d.slice(0, 50)]);
+                d = d.slice(50);
+              }
             }).setEncoding('utf8');
             proc.stderr.on('data', function (d) {
               console.log('STDERR:', d);
@@ -205,7 +209,7 @@ require('net').createServer(function (conn) {
             break;
           };
           
-          /*
+          /*/
           var cp = require('child_process').spawn('cowsay');
           cp.stdin.write(bin);
           cp.stdin.end();
@@ -220,7 +224,7 @@ require('net').createServer(function (conn) {
             
             sendPayload([{byte: 97}, {uint32: recip}]);
           });
-          */
+          //*/
         } else if (type == 'pty-req') {
           var pty = {
             term: packet.readString(),
@@ -246,9 +250,12 @@ require('net').createServer(function (conn) {
         var chan = packet.readUInt32();
         var data = packet.readString();
         console.log(chan, data);
-        if (proc)
-          proc.stdin.write(data);
-        else {
+        if (proc) {
+          while (data.length) {
+            proc.stdin.write(data.slice(0, 512));
+            data = data.slice(512);
+          }
+        } else {
           if (data == '\u0004') {
             sendPayload([{byte: 94}, {uint32: chan}, 'Hit q to exit\r\n']);
           } else if (data == 'q') {
@@ -266,6 +273,10 @@ require('net').createServer(function (conn) {
         process.exit();
     };
   };
+  
+  conn.on('error', function (err) {
+    console.log('Connection closed due to error.', err);
+  });
   
   console.log('New connection');
   conn.on('data', function (data) {
