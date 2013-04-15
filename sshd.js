@@ -304,7 +304,7 @@ require('net').createServer(function (conn) {
           console.log('Client warms up their shell');
           sendPayload([{byte: 99}, {uint32: recip}]); // SSH_MSG_CHANNEL_SUCCESS
           
-          sendPayload([{byte: 94}, {uint32: recip}, '\e[48;5;17m']);
+          sendPayload([{byte: 94}, {uint32: recip}, "\x1B[48;5;17m"]);
           proc = require('child_process').spawn('nyancat');
           proc.stdout.on('data', function (d) {
             sendPayload([{byte: 94}, {uint32: recip}, d.replace(/\n/g, '\r\n')]);
@@ -334,7 +334,7 @@ require('net').createServer(function (conn) {
         var data = packet.readString();
         console.log(chan, data);
         if (proc) {
-          if (data == '\u0003') {
+          if (data == '\u0003' || data == 'q') {
             proc.kill('SIGINT');
             proc = null;
           } else {
